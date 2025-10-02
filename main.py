@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 from pyrogram import Client, filters
-from pyrogram.types import Message, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto, InputMediaVideo
+from pyrogram.types import Message, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.enums import ParseMode
 from PIL import Image
 from hachoir.parser import createParser
@@ -53,12 +53,6 @@ MKV_AUDIO_CHANGE_MODE = set()
 # Stores the path of the downloaded file waiting for audio order
 AUDIO_CHANGE_FILE = {} 
 # ------------------------------
-
-# --- NEW STATE FOR VIDEO CONVERT ---
-VIDEO_CONVERT_MODE = set()
-# Stores file path and message ID for a file waiting for bitrate selection
-CONVERT_FILE_DATA = {} 
-# -----------------------------------
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", ""))
 MAX_SIZE = 4 * 1024 * 1024 * 1024
@@ -134,47 +128,17 @@ def progress_keyboard():
 def delete_caption_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("Delete Caption 🗑️", callback_data="delete_caption")]])
 
-# --- NEW UTILITY: Keyboard for Video Convert Bitrate Selection ---
-def bitrate_selection_keyboard(current_bitrate_mbps: float, total_size_mb: float, target_size_mb: float):
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("➖ 1 Mbps", callback_data="bitrate_dec_1"),
-            InlineKeyboardButton("➖ 0.1 Mbps", callback_data="bitrate_dec_01")
-        ],
-        [
-            InlineKeyboardButton(f"Current Bitrate: {current_bitrate_mbps:.1f} Mbps", callback_data="ignore"),
-        ],
-        [
-            InlineKeyboardButton("➕ 0.1 Mbps", callback_data="bitrate_inc_01"),
-            InlineKeyboardButton("➕ 1 Mbps", callback_data="bitrate_inc_1")
-        ],
-        [
-            InlineKeyboardButton(f"Original Size: {total_size_mb:.2f} MB", callback_data="ignore"),
-            InlineKeyboardButton(f"Target Size: {target_size_mb:.2f} MB", callback_data="ignore"),
-        ],
-        [
-            InlineKeyboardButton("Convert and Upload ▶️", callback_data="start_convert"),
-        ],
-        [
-            InlineKeyboardButton("Cancel ❌", callback_data="cancel_task")
-        ]
-    ])
-# ---------------------------------------------
-
 # --- NEW UTILITY: Keyboard for Mode Check ---
 def mode_check_keyboard(uid: int) -> InlineKeyboardMarkup:
     audio_status = "✅ ON" if uid in MKV_AUDIO_CHANGE_MODE else "❌ OFF"
     caption_status = "✅ ON" if uid in EDIT_CAPTION_MODE else "❌ OFF"
-    convert_status = "✅ ON" if uid in VIDEO_CONVERT_MODE else "❌ OFF"
     
     # Check if a file is waiting for track order input
-    waiting_audio_status = " (অর্ডার বাকি)" if uid in AUDIO_CHANGE_FILE else ""
-    waiting_convert_status = " (বিটরেট বাকি)" if uid in CONVERT_FILE_DATA else ""
+    waiting_status = " (অর্ডার বাকি)" if uid in AUDIO_CHANGE_FILE else ""
     
     keyboard = [
-        [InlineKeyboardButton(f"MKV Audio Change Mode {audio_status}{waiting_audio_status}", callback_data="toggle_audio_mode")],
-        [InlineKeyboardButton(f"Edit Caption Mode {caption_status}", callback_data="toggle_caption_mode")],
-        [InlineKeyboardButton(f"Video Convert Mode {convert_status}{waiting_convert_status}", callback_data="toggle_convert_mode")]
+        [InlineKeyboardButton(f"MKV Audio Change Mode {audio_status}{waiting_status}", callback_data="toggle_audio_mode")],
+        [InlineKeyboardButton(f"Edit Caption Mode {caption_status}", callback_data="toggle_caption_mode")]
     ]
     return InlineKeyboardMarkup(keyboard)
 # ---------------------------------------------
@@ -303,7 +267,7 @@ async def set_bot_commands():
     cmds = [
         BotCommand("start", "বট চালু/হেল্প"),
         BotCommand("upload_url", "URL থেকে ফাইল ডাউনলোড ও আপলোড (admin only)"),
-        BotCommand("setthumb", "কাস্টম থাম্বনেইল সেট করুন (ছবি রিপ্লাই/সময়) (admin only)"),
+        BotCommand("setthumb", "কাস্টম থাম্বনেইল সেট করুন (admin only)"),
         BotCommand("view_thumb", "আপনার থাম্বনেইল দেখুন (admin only)"),
         BotCommand("del_thumb", "আপনার থাম্বনেইল মুছে ফেলুন (admin only)"),
         BotCommand("set_caption", "কাস্টম ক্যাপশন সেট করুন (admin only)"),
@@ -311,8 +275,7 @@ async def set_bot_commands():
         BotCommand("edit_caption_mode", "শুধু ক্যাপশন এডিট করুন (admin only)"),
         BotCommand("rename", "reply করা ভিডিও রিনেম করুন (admin only)"),
         BotCommand("mkv_video_audio_change", "MKV ভিডিওর অডিও ট্র্যাক পরিবর্তন (admin only)"),
-        BotCommand("video_convert", "ভিডিও সাইজ ছোট করুন (admin only)"),
-        BotCommand("mode_check", "বর্তমান মোড স্ট্যাটাস চেক করুন (admin only)"),
+        BotCommand("mode_check", "বর্তমান মোড স্ট্যাটাস চেক করুন (admin only)"), # NEW COMMAND
         BotCommand("broadcast", "ব্রডকাস্ট (কেবল অ্যাডমিন)"),
         BotCommand("help", "সহায়িকা")
     ]
@@ -339,8 +302,7 @@ async def start_handler(c, m: Message):
         "/edit_caption_mode - শুধু ক্যাপশন এডিট করার মোড টগল করুন (admin only)\n"
         "/rename <newname.ext> - reply করা ভিডিও রিনেম করুন (admin only)\n"
         "/mkv_video_audio_change - MKV ভিডিওর অডিও ট্র্যাক পরিবর্তন মোড টগল করুন (admin only)\n"
-        "/video_convert - ভিডিও সাইজ ছোট করার মোড টগল করুন (admin only)\n"
-        "/mode_check - বর্তমান মোড স্ট্যাটাস চেক করুন এবং পরিবর্তন করুন (admin only)\n"
+        "/mode_check - বর্তমান মোড স্ট্যাটাস চেক করুন এবং পরিবর্তন করুন (admin only)\n" # NEW COMMAND in help
         "/broadcast <text> - ব্রডকাস্ট (শুধুমাত্র অ্যাডমিন)\n"
         "/help - সাহায্য"
     )
@@ -513,33 +475,6 @@ async def toggle_audio_change_mode(c, m: Message):
         MKV_AUDIO_CHANGE_MODE.add(uid)
         await m.reply_text("MKV অডিও পরিবর্তন মোড **অন** করা হয়েছে।\nঅনুগ্রহ করে **MKV ফাইল** অথবা অন্য কোনো **ভিডিও ফাইল** পাঠান।\n(এই মোড ম্যানুয়ালি অফ না করা পর্যন্ত চালু থাকবে।)")
 
-# --- NEW HANDLER: /video_convert ---
-@app.on_message(filters.command("video_convert") & filters.private)
-async def toggle_video_convert_mode(c, m: Message):
-    uid = m.from_user.id
-    if not is_admin(uid):
-        await m.reply_text("আপনার অনুমতি নেই এই কমান্ড চালানোর।")
-        return
-
-    if uid in VIDEO_CONVERT_MODE:
-        VIDEO_CONVERT_MODE.discard(uid)
-        # Clean up any previously waiting file
-        if uid in CONVERT_FILE_DATA:
-            try:
-                Path(CONVERT_FILE_DATA[uid]['path']).unlink(missing_ok=True)
-                if 'messages_to_delete' in CONVERT_FILE_DATA[uid]:
-                    # Attempt to delete the message with bitrate selection
-                    await c.delete_messages(m.chat.id, [msg_id for msg_id in CONVERT_FILE_DATA[uid]['messages_to_delete'] if msg_id != m.id])
-            except Exception:
-                pass
-            CONVERT_FILE_DATA.pop(uid, None)
-        await m.reply_text("ভিডিও কনভার্ট মোড **অফ** করা হয়েছে।")
-    else:
-        VIDEO_CONVERT_MODE.add(uid)
-        await m.reply_text("ভিডিও কনভার্ট মোড **অন** করা হয়েছে।\nঅনুগ্রহ করে **ভিডিও ফাইল** ফরোয়ার্ড করুন।")
-# ---------------------------------------------
-
-
 # --- NEW HANDLER: /mode_check ---
 @app.on_message(filters.command("mode_check") & filters.private)
 async def mode_check_cmd(c, m: Message):
@@ -550,10 +485,8 @@ async def mode_check_cmd(c, m: Message):
     
     audio_status = "✅ ON" if uid in MKV_AUDIO_CHANGE_MODE else "❌ OFF"
     caption_status = "✅ ON" if uid in EDIT_CAPTION_MODE else "❌ OFF"
-    convert_status = "✅ ON" if uid in VIDEO_CONVERT_MODE else "❌ OFF"
     
     waiting_status_text = "একটি ফাইল ট্র্যাক অর্ডারের জন্য অপেক্ষা করছে।" if uid in AUDIO_CHANGE_FILE else "কোনো ফাইল অপেক্ষা করছে না।"
-    waiting_convert_text = "একটি ফাইল বিটরেট নির্বাচনের জন্য অপেক্ষা করছে।" if uid in CONVERT_FILE_DATA else "কোনো ফাইল অপেক্ষা করছে না।"
     
     status_text = (
         "🤖 **বর্তমান মোড স্ট্যাটাস:**\n\n"
@@ -562,16 +495,13 @@ async def mode_check_cmd(c, m: Message):
         f"   - *স্ট্যাটাস:* {waiting_status_text}\n\n"
         f"2. **Edit Caption Mode:** `{caption_status}`\n"
         f"   - *কাজ:* ফরওয়ার্ড করা ভিডিওর রিনেম বা থাম্বনেইল পরিবর্তন না করে শুধু সেভ করা ক্যাপশন যুক্ত করে।\n\n"
-        f"3. **Video Convert Mode:** `{convert_status}`\n"
-        f"   - *কাজ:* ফরওয়ার্ড করা ভিডিওর সাইজ কমাতে বিটরেট পরিবর্তন করার সুযোগ দেয়।\n"
-        f"   - *স্ট্যাটাস:* {waiting_convert_text}\n\n"
         "নিচের বাটনগুলিতে ক্লিক করে মোড পরিবর্তন করুন।"
     )
     
     await m.reply_text(status_text, reply_markup=mode_check_keyboard(uid), parse_mode=ParseMode.MARKDOWN)
 
 # --- NEW CALLBACK: Mode Toggle Buttons ---
-@app.on_callback_query(filters.regex("toggle_(audio|caption|convert)_mode"))
+@app.on_callback_query(filters.regex("toggle_(audio|caption)_mode"))
 async def mode_toggle_callback(c: Client, cb: CallbackQuery):
     uid = cb.from_user.id
     if not is_admin(uid):
@@ -579,7 +509,6 @@ async def mode_toggle_callback(c: Client, cb: CallbackQuery):
         return
 
     action = cb.data
-    message = ""
     
     if action == "toggle_audio_mode":
         if uid in MKV_AUDIO_CHANGE_MODE:
@@ -606,42 +535,21 @@ async def mode_toggle_callback(c: Client, cb: CallbackQuery):
         else:
             EDIT_CAPTION_MODE.add(uid)
             message = "Edit Caption Mode ON."
-
-    elif action == "toggle_convert_mode":
-        if uid in VIDEO_CONVERT_MODE:
-            VIDEO_CONVERT_MODE.discard(uid)
-            if uid in CONVERT_FILE_DATA:
-                try:
-                    Path(CONVERT_FILE_DATA[uid]['path']).unlink(missing_ok=True)
-                    if 'messages_to_delete' in CONVERT_FILE_DATA[uid]:
-                        await c.delete_messages(cb.message.chat.id, [msg_id for msg_id in CONVERT_FILE_DATA[uid]['messages_to_delete'] if msg_id != cb.message.id])
-                except Exception:
-                    pass
-                CONVERT_FILE_DATA.pop(uid, None)
-            message = "Video Convert Mode OFF."
-        else:
-            VIDEO_CONVERT_MODE.add(uid)
-            message = "Video Convert Mode ON."
             
     # Refresh the keyboard and edit the original message (similar to mode_check_cmd)
     try:
         audio_status = "✅ ON" if uid in MKV_AUDIO_CHANGE_MODE else "❌ OFF"
         caption_status = "✅ ON" if uid in EDIT_CAPTION_MODE else "❌ OFF"
-        convert_status = "✅ ON" if uid in VIDEO_CONVERT_MODE else "❌ OFF"
-
-        waiting_audio_status = "একটি ফাইল ট্র্যাক অর্ডারের জন্য অপেক্ষা করছে।" if uid in AUDIO_CHANGE_FILE else "কোনো ফাইল অপেক্ষা করছে না।"
-        waiting_convert_status = "একটি ফাইল বিটরেট নির্বাচনের জন্য অপেক্ষা করছে।" if uid in CONVERT_FILE_DATA else "কোনো ফাইল অপেক্ষা করছে না।"
+        
+        waiting_status_text = "একটি ফাইল ট্র্যাক অর্ডারের জন্য অপেক্ষা করছে।" if uid in AUDIO_CHANGE_FILE else "কোনো ফাইল অপেক্ষা করছে না।"
 
         status_text = (
             "🤖 **বর্তমান মোড স্ট্যাটাস:**\n\n"
             f"1. **MKV Audio Change Mode:** `{audio_status}`\n"
             f"   - *কাজ:* ফরওয়ার্ড/ডাউনলোড করা MKV/ভিডিও ফাইলের অডিও ট্র্যাক অর্ডার পরিবর্তন করে। (ম্যানুয়ালি অফ না করা পর্যন্ত ON থাকবে)\n"
-            f"   - *স্ট্যাটাস:* {waiting_audio_status}\n\n"
+            f"   - *স্ট্যাটাস:* {waiting_status_text}\n\n"
             f"2. **Edit Caption Mode:** `{caption_status}`\n"
             f"   - *কাজ:* ফরওয়ার্ড করা ভিডিওর রিনেম বা থাম্বনেইল পরিবর্তন না করে শুধু সেভ করা ক্যাপশন যুক্ত করে।\n\n"
-            f"3. **Video Convert Mode:** `{convert_status}`\n"
-            f"   - *কাজ:* ফরওয়ার্ড করা ভিডিওর সাইজ কমাতে বিটরেট পরিবর্তন করার সুযোগ দেয়।\n"
-            f"   - *স্ট্যাটাস:* {waiting_convert_status}\n\n"
             "নিচের বাটনগুলিতে ক্লিক করে মোড পরিবর্তন করুন।"
         )
         
@@ -811,8 +719,7 @@ async def handle_url_download_and_upload(c: Client, m: Message, url: str):
             await m.reply_text(f"অপস! কিছু ভুল হয়েছে: {e}", reply_markup=None)
     finally:
         try:
-            if cancel_event in TASKS.get(uid, []):
-                TASKS[uid].remove(cancel_event)
+            TASKS[uid].remove(cancel_event)
         except Exception:
             pass
 
@@ -901,8 +808,7 @@ async def handle_caption_only_upload(c: Client, m: Message):
             await m.reply_text(f"ক্যাপশন এডিটে ত্রুটি: {e}", reply_markup=None)
     finally:
         try:
-            if cancel_event in TASKS.get(uid, []):
-                TASKS[uid].remove(cancel_event)
+            TASKS[uid].remove(cancel_event)
         except Exception:
             pass
 
@@ -917,13 +823,6 @@ async def forwarded_file_or_direct_file(c: Client, m: Message):
         await handle_audio_change_file(c, m)
         return
     # -------------------------------------------------
-
-    # --- NEW: Check for Video Convert Mode ---
-    # Only process forwarded videos/documents with video MIME type in this mode
-    if uid in VIDEO_CONVERT_MODE and m.forward_date and (m.video or m.document and 'video' in (m.document.mime_type or '')):
-        await handle_video_convert_file(c, m)
-        return
-    # -----------------------------------------
 
     # Fallback to existing logic (Forwarded/direct file for rename/re-upload logic)
 
@@ -968,8 +867,7 @@ async def forwarded_file_or_direct_file(c: Client, m: Message):
             await m.reply_text(f"ফাইল প্রসেসিংয়ে সমস্যা: {e}")
         finally:
             try:
-                if cancel_event in TASKS.get(uid, []):
-                    TASKS[uid].remove(cancel_event)
+                TASKS[uid].remove(cancel_event)
             except Exception:
                 pass
     else:
@@ -1048,180 +946,10 @@ async def handle_audio_change_file(c: Client, m: Message):
             tmp_path.unlink(missing_ok=True)
     finally:
         try:
-            if cancel_event in TASKS.get(uid, []):
-                TASKS[uid].remove(cancel_event)
+            TASKS[uid].remove(cancel_event)
         except Exception:
             pass
 # -----------------------------------------------------
-
-# --- HANDLER FUNCTION: Handle file in video convert mode ---
-async def handle_video_convert_file(c: Client, m: Message):
-    uid = m.from_user.id
-    file_info = m.video or m.document
-    
-    # Check if it's a valid video file (must have duration, and be a supported video mime type)
-    if not file_info or not file_info.duration or file_info.mime_type not in ["video/mp4", "video/x-matroska", "video/quicktime", "video/avi", "video/webm"]:
-        await m.reply_text("এটি একটি ফরোয়ার্ড করা ভিডিও ফাইল নয়, অথবা সমর্থিত ফরম্যাট নয় (MP4, MKV, MOV, AVI, WEBM)।")
-        return
-
-    # Clean up any previously waiting file
-    if uid in CONVERT_FILE_DATA:
-        try:
-            Path(CONVERT_FILE_DATA[uid]['path']).unlink(missing_ok=True)
-            if 'messages_to_delete' in CONVERT_FILE_DATA[uid]:
-                await c.delete_messages(m.chat.id, CONVERT_FILE_DATA[uid]['messages_to_delete'])
-        except Exception:
-            pass
-        CONVERT_FILE_DATA.pop(uid, None)
-    
-    # Download the file
-    cancel_event = asyncio.Event()
-    TASKS.setdefault(uid, []).append(cancel_event)
-    
-    tmp_path = None
-    try:
-        original_name = file_info.file_name or f"video_{file_info.file_unique_id}.mp4"
-            
-        tmp_path = TMP / f"convert_{uid}_{int(datetime.now().timestamp())}_{original_name}"
-        
-        status_msg = await m.reply_text("কনভার্সন প্রস্তুতির জন্য ফাইল ডাউনলোড করা হচ্ছে...", reply_markup=progress_keyboard())
-        await m.download(file_name=str(tmp_path))
-        
-        # Calculate initial values
-        duration_sec = file_info.duration
-        original_size_mb = file_info.file_size / (1024 * 1024)
-        
-        # Calculate original bitrate (estimated)
-        # Bitrate (Mbps) = File Size (MB) * 8 / Duration (s)
-        original_bitrate_mbps = (original_size_mb * 8) / duration_sec 
-        
-        # Set initial target bitrate: 50% of original, max 4 Mbps, min 1 Mbps
-        target_bitrate_mbps = min(original_bitrate_mbps * 0.5, 4.0)
-        target_bitrate_mbps = max(target_bitrate_mbps, 1.0)
-        
-        # Calculate target size (MB) = (Target Bitrate (Mbps) * Duration (s)) / 8
-        target_size_mb = (target_bitrate_mbps * duration_sec) / 8
-
-        # Store file info and initial settings
-        CONVERT_FILE_DATA[uid] = {
-            'path': tmp_path, 
-            'original_name': original_name,
-            'original_size_mb': original_size_mb,
-            'duration_sec': duration_sec,
-            'bitrate_mbps': target_bitrate_mbps,
-            'messages_to_delete': [m.id, status_msg.id] # Messages to auto-delete
-        }
-        
-        # Send initial message with selection keyboard
-        text = "ভিডিও ডাউনলোড হয়েছে। কনভার্ট করার জন্য টার্গেট বিটরেট (Mbps) এবং সাইজ নির্বাচন করুন:\n\n**বিটরেট 0.1 Mbps থেকে 8 Mbps পর্যন্ত সেট করা যাবে।**"
-        await status_msg.edit(
-            text, 
-            reply_markup=bitrate_selection_keyboard(target_bitrate_mbps, original_size_mb, target_size_mb)
-        ) 
-
-    except Exception as e:
-        logger.error(f"Video convert prep error: {e}")
-        await m.reply_text(f"ভিডিও কনভার্ট প্রস্তুতির সমস্যা: {e}")
-        if tmp_path and tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
-    finally:
-        try:
-            if cancel_event in TASKS.get(uid, []):
-                TASKS[uid].remove(cancel_event)
-        except Exception:
-            pass
-# -----------------------------------------------------
-
-# --- FFmpeg Remux and Re-encode Logic ---
-# Handles the actual video conversion after bitrate selection
-async def handle_video_remux(c: Client, status_msg: Message, in_path: Path, original_name: str, target_bitrate_mbps: float, messages_to_delete: list = None):
-    uid = status_msg.chat.id
-    cancel_event = asyncio.Event()
-    TASKS.setdefault(uid, []).append(cancel_event)
-    
-    out_name = original_name
-    
-    # Ensure the output has an extension
-    if not Path(out_name).suffix:
-        out_name += ".mp4"
-        
-    # Use MP4 for broad compatibility after re-encode
-    if Path(out_name).suffix.lower() != ".mp4":
-        out_name = Path(out_name).stem + ".mp4"
-        
-    # Temporary output path for converted file
-    out_path = TMP / f"converted_{uid}_{int(datetime.now().timestamp())}_{out_name}"
-    
-    # Target bitrate in bps
-    target_bitrate_bps = int(target_bitrate_mbps * 1_000_000) 
-    
-    # FFmpeg command for re-encoding (reducing bitrate)
-    cmd = [
-        "ffmpeg",
-        "-i", str(in_path),
-        "-c:v", "libx264",       # Video codec
-        "-preset", "fast",       # Speed of conversion (fast is a good balance)
-        "-b:v", f"{target_bitrate_bps}", # Target video bitrate
-        "-maxrate", f"{target_bitrate_bps * 1.07}", # Max bitrate 
-        "-bufsize", f"{target_bitrate_bps * 2}",  # Buffer size
-        "-crf", "23",            # Quality setting (23 is default/good quality)
-        "-c:a", "aac",           # Audio codec
-        "-b:a", "128k",          # Audio bitrate
-        "-map_metadata", "0",
-        "-movflags", "+faststart", # For MP4
-        str(out_path)
-    ]
-
-    try:
-        # Check for cancellation before running FFmpeg
-        if cancel_event.is_set():
-            raise Exception("Operation cancelled by user.")
-            
-        await status_msg.edit(f"ভিডিও কনভার্ট করা হচ্ছে ({target_bitrate_mbps:.1f} Mbps)...", reply_markup=progress_keyboard())
-        
-        # Run the FFmpeg command
-        result = await asyncio.to_thread(
-            subprocess.run,
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=7200 # 2 hours timeout
-        )
-        
-        if result.returncode != 0:
-            logger.error(f"FFmpeg Convert failed: {result.stderr}")
-            out_path.unlink(missing_ok=True)
-            raise Exception(f"FFmpeg কনভার্ট ব্যর্থ হয়েছে। ত্রুটি: {result.stderr[:500]}...")
-
-        if not out_path.exists() or out_path.stat().st_size == 0:
-            raise Exception("পরিবর্তিত ফাইলটি পাওয়া যায়নি বা শূন্য আকারের।")
-
-        await status_msg.edit("কনভার্সন সম্পন্ন, ফাইল আপলোড করা হচ্ছে...", reply_markup=progress_keyboard())
-        
-        # Proceed to final upload. Pass messages_to_delete for final cleanup.
-        await process_file_and_upload(
-            c, status_msg, out_path, 
-            original_name=out_name, 
-            messages_to_delete=messages_to_delete
-        ) 
-
-    except Exception as e:
-        logger.error(f"Video convert process error: {e}")
-        try:
-            await status_msg.edit(f"ভিডিও কনভার্ট প্রক্রিয়া ব্যর্থ: {e}")
-        except Exception:
-            pass # Ignore if status_msg is deleted
-    finally:
-        try:
-            in_path.unlink(missing_ok=True)
-            out_path.unlink(missing_ok=True)
-            if cancel_event in TASKS.get(uid, []):
-                TASKS[uid].remove(cancel_event)
-        except Exception:
-            pass
-# ---------------------------------------------------
-
 
 # --- HANDLER FUNCTION: Handle audio remux ---
 async def handle_audio_remux(c: Client, m: Message, in_path: Path, original_name: str, new_stream_map: list, messages_to_delete: list = None):
@@ -1292,8 +1020,7 @@ async def handle_audio_remux(c: Client, m: Message, in_path: Path, original_name
         try:
             in_path.unlink(missing_ok=True)
             out_path.unlink(missing_ok=True)
-            if cancel_event in TASKS.get(uid, []):
-                TASKS[uid].remove(cancel_event)
+            TASKS[uid].remove(cancel_event)
         except Exception:
             pass
 # ---------------------------------------------------
@@ -1336,8 +1063,7 @@ async def rename_cmd(c, m: Message):
         await m.reply_text(f"রিনেম ত্রুটি: {e}")
     finally:
         try:
-            if cancel_event in TASKS.get(uid, []):
-                TASKS[uid].remove(cancel_event)
+            TASKS[uid].remove(cancel_event)
         except Exception:
             pass
 
@@ -1351,8 +1077,9 @@ async def cancel_task_cb(c, cb):
             except:
                 pass
         
-        # Clean up audio change state if in progress
+        # New: Clean up audio change state if in progress
         if uid in MKV_AUDIO_CHANGE_MODE:
+            # We don't clear the mode, but clear the waiting file state if it exists
             if uid in AUDIO_CHANGE_FILE:
                 if 'message_id' in AUDIO_CHANGE_FILE[uid]:
                     try:
@@ -1364,22 +1091,6 @@ async def cancel_task_cb(c, cb):
                 except Exception:
                     pass
                 AUDIO_CHANGE_FILE.pop(uid, None)
-        
-        # Clean up video convert state if in progress
-        if uid in VIDEO_CONVERT_MODE:
-            if uid in CONVERT_FILE_DATA:
-                if 'messages_to_delete' in CONVERT_FILE_DATA[uid]:
-                    # Attempt to delete all pending messages (including the original forwarded message)
-                    try:
-                        await c.delete_messages(cb.message.chat.id, CONVERT_FILE_DATA[uid]['messages_to_delete'])
-                    except Exception:
-                        pass
-                try:
-                    Path(CONVERT_FILE_DATA[uid]['path']).unlink(missing_ok=True)
-                except Exception:
-                    pass
-                CONVERT_FILE_DATA.pop(uid, None)
-            VIDEO_CONVERT_MODE.discard(uid) # Also turn off the mode on cancel
             
         await cb.answer("অপারেশন বাতিল করা হয়েছে।", show_alert=True)
         try:
@@ -1388,90 +1099,6 @@ async def cancel_task_cb(c, cb):
             pass
     else:
         await cb.answer("কোনো অপারেশন চলছে না।", show_alert=True)
-
-# --- NEW CALLBACK: Bitrate Selection and Convert Start ---
-@app.on_callback_query(filters.regex("bitrate_(inc|dec)_(01|1)|start_convert|ignore"))
-async def video_convert_callback(c: Client, cb: CallbackQuery):
-    uid = cb.from_user.id
-    if not is_admin(uid):
-        await cb.answer("আপনার অনুমতি নেই।", show_alert=True)
-        return
-
-    if cb.data == "ignore":
-        await cb.answer("শুধুমাত্র তথ্য।", show_alert=False)
-        return
-
-    if uid not in CONVERT_FILE_DATA:
-        await cb.answer("কোনো ফাইল কনভার্ট করার জন্য অপেক্ষা করছে না।", show_alert=True)
-        return
-
-    file_data = CONVERT_FILE_DATA[uid]
-    action = cb.data
-    
-    current_bitrate_mbps = file_data['bitrate_mbps']
-    duration_sec = file_data['duration_sec']
-    original_size_mb = file_data['original_size_mb']
-    
-    new_bitrate_mbps = current_bitrate_mbps
-
-    # --- Bitrate Change Logic ---
-    if action.startswith("bitrate_"):
-        try:
-            if "inc" in action:
-                change = 0.1 if "01" in action else 1.0
-                new_bitrate_mbps += change
-            elif "dec" in action:
-                change = 0.1 if "01" in action else 1.0
-                new_bitrate_mbps -= change
-            
-            # Clamp the bitrate between 0.1 and 8.0 Mbps
-            new_bitrate_mbps = max(0.1, min(new_bitrate_mbps, 8.0))
-            
-            # Update state only if changed significantly
-            if abs(new_bitrate_mbps - current_bitrate_mbps) > 0.01:
-                file_data['bitrate_mbps'] = new_bitrate_mbps
-                
-                # Calculate new target size (MB)
-                target_size_mb = (new_bitrate_mbps * duration_sec) / 8
-
-                # Update the keyboard
-                await cb.message.edit_reply_markup(
-                    reply_markup=bitrate_selection_keyboard(new_bitrate_mbps, original_size_mb, target_size_mb)
-                )
-                await cb.answer(f"নতুন বিটরেট: {new_bitrate_mbps:.1f} Mbps", show_alert=False)
-            else:
-                 await cb.answer(f"বিটরেট 0.1 Mbps থেকে 8 Mbps এর মধ্যে থাকতে হবে।", show_alert=False)
-
-
-        except Exception as e:
-            await cb.answer(f"বিটরেট পরিবর্তনে সমস্যা: {e}", show_alert=True)
-            logger.error(f"Bitrate change error: {e}")
-        
-    # --- Convert Start Logic ---
-    elif action == "start_convert":
-        # Clear mode for the user
-        VIDEO_CONVERT_MODE.discard(uid)
-        
-        # Start the conversion task
-        asyncio.create_task(
-            handle_video_remux(
-                c, cb.message, 
-                file_data['path'], 
-                file_data['original_name'], 
-                file_data['bitrate_mbps'], 
-                file_data['messages_to_delete']
-            )
-        )
-        
-        # Clear file data immediately after starting the task
-        CONVERT_FILE_DATA.pop(uid, None)
-        await cb.answer("ভিডিও কনভার্ট প্রক্রিয়া শুরু হচ্ছে...", show_alert=True)
-        try:
-            # Change status message immediately
-            await cb.message.edit_text("ভিডিও কনভার্ট প্রক্রিয়া শুরু হচ্ছে...", reply_markup=progress_keyboard())
-        except Exception:
-            pass
-
 
 # ---- main processing and upload (functions simplified for brevity, assuming they work) ----
 async def generate_video_thumbnail(video_path: Path, thumb_path: Path, timestamp_sec: int = 1):
@@ -1715,8 +1342,7 @@ async def process_file_and_upload(c: Client, m: Message, in_path: Path, original
                 await status_msg.edit("অপারেশন বাতিল করা হয়েছে, আপলোড শুরু করা হয়নি।", reply_markup=None)
             except Exception:
                 await m.reply_text("অপারেশন বাতিল করা হয়েছে, আপলোড শুরু করা হয়নি।", reply_markup=None)
-            if cancel_event in TASKS.get(uid, []):
-                TASKS[uid].remove(cancel_event)
+            TASKS[uid].remove(cancel_event)
             return
         
         duration_sec = get_video_duration(upload_path) if upload_path.exists() else 0
@@ -1783,8 +1409,7 @@ async def process_file_and_upload(c: Client, m: Message, in_path: Path, original
                 in_path.unlink()
             if temp_thumb_path and Path(temp_thumb_path).exists():
                 Path(temp_thumb_path).unlink()
-            if cancel_event in TASKS.get(uid, []):
-                TASKS[uid].remove(cancel_event)
+            TASKS[uid].remove(cancel_event)
         except Exception:
             pass
 
